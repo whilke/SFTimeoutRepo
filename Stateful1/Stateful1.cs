@@ -7,17 +7,51 @@ using System.Threading.Tasks;
 using Microsoft.ServiceFabric.Data.Collections;
 using Microsoft.ServiceFabric.Services.Communication.Runtime;
 using Microsoft.ServiceFabric.Services.Runtime;
+using Shared;
+using Microsoft.ServiceFabric.Services.Remoting.Runtime;
 
 namespace Stateful1
 {
     /// <summary>
     /// An instance of this class is created for each service replica by the Service Fabric runtime.
     /// </summary>
-    internal sealed class Stateful1 : StatefulService
+    internal sealed class Stateful1 : StatefulService, ITestService
     {
         public Stateful1(StatefulServiceContext context)
             : base(context)
         { }
+
+        public async Task Update()
+        {
+            var rc = await StateManager.GetOrAddAsync<IReliableDictionary<string, string>>("test_collection");
+            for(int i=0; i < 10; ++i)
+            {
+                try
+                {
+                    using (var tx = StateManager.CreateTransaction())
+                    {
+
+                        var c = await rc.TryGetValueAsync(tx, "key");
+                        if (c.HasValue)
+                        {
+                            var oldValue = c.Value;
+                            var newValue = "value2";                        
+                            await rc.SetAsync(tx, "key", newValue); // AddOrUpdate and TryUpdate all show same issue.
+                        }
+                        else
+                        {
+                            await rc.SetAsync(tx, "key", "value2");
+                        }
+                        await tx.CommitAsync();
+                    }
+                }
+                catch(TimeoutException e)
+                {
+                    if (i == 9) throw;
+                    await Task.Delay(100);
+                }
+            }
+        }
 
         /// <summary>
         /// Optional override to create listeners (e.g., HTTP, Service Remoting, WCF, etc.) for this service replica to handle client or user requests.
@@ -28,7 +62,11 @@ namespace Stateful1
         /// <returns>A collection of listeners.</returns>
         protected override IEnumerable<ServiceReplicaListener> CreateServiceReplicaListeners()
         {
-            return new ServiceReplicaListener[0];
+            var serviceReplicatListener = new[]
+                       {
+                new ServiceReplicaListener(context => this.CreateServiceRemotingListener(context))
+            };
+            return serviceReplicatListener;
         }
 
         /// <summary>
